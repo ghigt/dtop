@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -17,8 +18,8 @@ import (
 	"github.com/fsouza/go-dockerclient"
 )
 
-type Pot struct {
-	c                   *docker.Client // Used to talk to the daemon
+type Top struct {
+	client              *docker.Client // Used to talk to the daemon
 	status              Status         // Current status
 	snapshot            []Container    // Current containers/processes state
 	win                 *gnc.Window    // goncurse Window
@@ -29,14 +30,12 @@ type Pot struct {
 }
 
 // Returns the running processes for the current Container
-func (pot *Pot) GetProcesses(cid string) []ProcessLine {
+func (top *Top) GetProcesses(cid string) []ProcessLine {
 	res := make([]ProcessLine, 0, 10)
 
-	topr, e := pot.c.TopContainer(cid, url.QueryEscape("xo pid,etime,%cpu,%mem,cmd"))
+	topr, e := top.client.TopContainer(cid, url.QueryEscape("xo pid,etime,%cpu,%mem,cmd"))
 	if e != nil {
-
-		// /!\ NEED TO SEE IF ERROR APPEND !
-
+		log.Println(e)
 		return res
 	}
 
@@ -56,15 +55,12 @@ func (pot *Pot) GetProcesses(cid string) []ProcessLine {
 }
 
 // Returns the list of running containers as well as internal processes
-func (pot *Pot) Snapshot() []Container {
+func (top *Top) Snapshot() []Container {
 	res := make([]Container, 0, 16)
 
-	cnts, e := pot.c.ListContainers(docker.ListContainersOptions{All: true})
+	cnts, e := top.client.ListContainers(docker.ListContainersOptions{All: true})
 	if e != nil {
-
-		fmt.Println(e)
-		// /!\ NEED TO SEE IF ERROR APPEND
-
+		log.Println(e)
 		return res
 	}
 	for _, cnt := range cnts {
@@ -79,7 +75,7 @@ func (pot *Pot) Snapshot() []Container {
 		c.container.Status = cnt.Status
 
 		if strings.HasPrefix(c.container.Status, "Up") {
-			c.processes = pot.GetProcesses(c.container.Id)
+			c.processes = top.GetProcesses(c.container.Id)
 		}
 
 		total_cpu := 0.0
@@ -97,7 +93,7 @@ func (pot *Pot) Snapshot() []Container {
 		c.container.CPU = fmt.Sprintf("%.1f", total_cpu)
 		c.container.RAM = fmt.Sprintf("%.1f", total_ram)
 
-		for _, cn := range pot.snapshot {
+		for _, cn := range top.snapshot {
 			if cn.container.Id == c.container.Id {
 				c.isSelected = cn.isSelected
 				c.showProcesses = cn.showProcesses
@@ -111,40 +107,40 @@ func (pot *Pot) Snapshot() []Container {
 	return res
 }
 
-func (pot *Pot) PrintActive(l PrintedLine, lc int, i int) {
+func (top *Top) PrintActive(l PrintedLine, lc int, i int) {
 	if i < scroll || i >= scroll+lc {
 		return
 	}
 	if active == i {
-		pot.win.AttrOn(gnc.A_REVERSE)
-		pot.win.Println(l.line)
-		pot.win.AttrOff(gnc.A_REVERSE)
+		top.win.AttrOn(gnc.A_REVERSE)
+		top.win.Println(l.line)
+		top.win.AttrOff(gnc.A_REVERSE)
 	} else {
 		if l.isActive {
-			pot.win.ColorOn(COLOR_SELECTION)
-			pot.win.Println(l.line)
-			pot.win.ColorOff(COLOR_SELECTION)
+			top.win.ColorOn(COLOR_SELECTION)
+			top.win.Println(l.line)
+			top.win.ColorOff(COLOR_SELECTION)
 		} else if l.isContainer {
 			if l.isRunning {
-				pot.win.ColorOn(COLOR_RUNNING)
-				pot.win.Println(l.line)
-				pot.win.ColorOff(COLOR_RUNNING)
+				top.win.ColorOn(COLOR_RUNNING)
+				top.win.Println(l.line)
+				top.win.ColorOff(COLOR_RUNNING)
 			} else {
-				pot.win.ColorOn(COLOR_CONTAINER)
-				pot.win.Println(l.line)
-				pot.win.ColorOff(COLOR_CONTAINER)
+				top.win.ColorOn(COLOR_CONTAINER)
+				top.win.Println(l.line)
+				top.win.ColorOff(COLOR_CONTAINER)
 			}
 		} else {
-			pot.win.Println(l.line)
+			top.win.Println(l.line)
 		}
 	}
 }
 
-func NewPot() *Pot {
+func NewTop() *Top {
 	// default settings
-	return &Pot{
-		c:                   initClient(),
-		status:              STATUS_POT,
+	return &Top{
+		client:              initClient(),
+		status:              STATUS_TOP,
 		snapshot:            []Container{},
 		win:                 nil,
 		showGlobalProcesses: false, // show processes
@@ -153,10 +149,10 @@ func NewPot() *Pot {
 	}
 }
 
-func (pot *Pot) Run() {
+func (top *Top) Run() {
 	var err error
 
-	pot.win, err = gnc.Init()
+	top.win, err = gnc.Init()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -169,7 +165,7 @@ func (pot *Pot) Run() {
 	gnc.InitPair(COLOR_HELP, gnc.C_YELLOW, gnc.C_BLACK)
 	gnc.InitPair(COLOR_RUNNING, gnc.C_GREEN, gnc.C_BLACK)
 	gnc.InitPair(COLOR_HIGHLIGHT, gnc.C_MAGENTA, gnc.C_BLACK)
-	pot.win.Keypad(true)
+	top.win.Keypad(true)
 	gnc.Echo(false)
 	gnc.Cursor(0)
 
@@ -183,30 +179,30 @@ func (pot *Pot) Run() {
 		for {
 			c <- scr.GetChar()
 		}
-	}(pot.win, k)
+	}(top.win, k)
 
-	pot.snapshot = pot.Snapshot()
+	top.snapshot = top.Snapshot()
 
 	for {
 		// Print screen
-		my, mx := pot.win.MaxYX()
+		my, mx := top.win.MaxYX()
 		lc := my - HEADER_SIZE
 		wc := (mx - 1) / NB_COLUMNS
-		pot.win.Erase()
+		top.win.Erase()
 		if mx < 40 || my < 5 {
 			continue
 		}
 
-		switch pot.status {
-		case STATUS_POT:
-			pot.PrintPot(wc, lc)
-			pot.win.Refresh()
+		switch top.status {
+		case STATUS_TOP:
+			top.Printtop(wc, lc)
+			top.win.Refresh()
 		case STATUS_HELP:
-			pot.PrintHelp(wc)
-			pot.win.Refresh()
+			top.PrintHelp(wc)
+			top.win.Refresh()
 		case STATUS_INFO:
-			pot.PrintInfo(wc)
-			pot.win.Refresh()
+			top.PrintInfo(wc)
+			top.win.Refresh()
 		}
 
 		// Handle Events
@@ -215,8 +211,8 @@ func (pot *Pot) Run() {
 			if kk == 'q' {
 				return
 			}
-			switch pot.status {
-			case STATUS_POT:
+			switch top.status {
+			case STATUS_TOP:
 				if kk == gnc.KEY_DOWN {
 					active = active + 1
 				}
@@ -224,116 +220,116 @@ func (pot *Pot) Run() {
 					active = active - 1
 				}
 				if kk == 'h' {
-					pot.status = STATUS_HELP
+					top.status = STATUS_HELP
 				}
 				if kk == 'A' {
-					pot.showGlobalProcesses = !pot.showGlobalProcesses
+					top.showGlobalProcesses = !top.showGlobalProcesses
 				}
 				if kk == 'k' {
-					for _, c := range pot.getSelectedContainers() {
-						pot.KillContainer(&pot.snapshot[c])
+					for _, c := range top.getSelectedContainers() {
+						top.KillContainer(&top.snapshot[c])
 					}
 				}
 				if kk == 'u' {
-					for i, _ := range pot.snapshot {
-						pot.snapshot[i].isSelected = false
+					for i, _ := range top.snapshot {
+						top.snapshot[i].isSelected = false
 					}
 				}
 				if kk == 'a' {
-					for _, c := range pot.getSelectedContainers() {
-						pot.snapshot[c].showProcesses = !pot.snapshot[c].showProcesses
+					for _, c := range top.getSelectedContainers() {
+						top.snapshot[c].showProcesses = !top.snapshot[c].showProcesses
 					}
 				}
 				if kk == ' ' {
-					c := pot.GetContainerByPos(active)
+					c := top.GetContainerByPos(active)
 					if c != -1 {
-						pot.snapshot[c].isSelected = !pot.snapshot[c].isSelected
+						top.snapshot[c].isSelected = !top.snapshot[c].isSelected
 					}
 					active = active + 1
 				}
 				if kk == 's' {
-					for _, c := range pot.getSelectedContainers() {
-						pot.StartContainer(&pot.snapshot[c])
+					for _, c := range top.getSelectedContainers() {
+						top.StartContainer(&top.snapshot[c])
 					}
 				}
 				if kk == 'S' {
-					for _, c := range pot.getSelectedContainers() {
-						pot.StopContainer(&pot.snapshot[c])
+					for _, c := range top.getSelectedContainers() {
+						top.StopContainer(&top.snapshot[c])
 					}
 				}
 				if kk == 'r' {
-					for _, c := range pot.getSelectedContainers() {
-						pot.RmContainer(&pot.snapshot[c])
+					for _, c := range top.getSelectedContainers() {
+						top.RmContainer(&top.snapshot[c])
 					}
 				}
 				if kk == 'i' {
-					c := pot.GetContainerByPos(active)
+					c := top.GetContainerByPos(active)
 					if c != -1 {
-						pot.currentInfo = pot.snapshot[c]
-						pot.status = STATUS_INFO
+						top.currentInfo = top.snapshot[c]
+						top.status = STATUS_INFO
 					}
 				}
 				if kk == 'p' {
-					for _, c := range pot.getSelectedContainers() {
-						pot.PauseContainer(&pot.snapshot[c])
+					for _, c := range top.getSelectedContainers() {
+						top.PauseContainer(&top.snapshot[c])
 					}
 				}
 				if kk == 'P' {
-					for _, c := range pot.getSelectedContainers() {
-						pot.UnpauseContainer(&pot.snapshot[c])
+					for _, c := range top.getSelectedContainers() {
+						top.UnpauseContainer(&top.snapshot[c])
 					}
 				}
 			case STATUS_HELP:
 				if kk == 'h' {
-					pot.status = STATUS_POT
+					top.status = STATUS_TOP
 				}
 			case STATUS_INFO:
 				if kk == 'i' {
-					pot.status = STATUS_POT
+					top.status = STATUS_TOP
 				}
 			}
 			if kk == '1' {
-				pot.sort = SORT_NAME
+				top.sort = SORT_NAME
 			}
 			if kk == '2' {
-				pot.sort = SORT_IMAGE
+				top.sort = SORT_IMAGE
 			}
 			if kk == '3' {
-				pot.sort = SORT_ID
+				top.sort = SORT_ID
 			}
 			if kk == '4' {
-				pot.sort = SORT_COMMAND
+				top.sort = SORT_COMMAND
 			}
 			if kk == '5' {
-				pot.sort = SORT_UPTIME
+				top.sort = SORT_UPTIME
 			}
 			if kk == '6' {
-				pot.sort = SORT_STATUS
+				top.sort = SORT_STATUS
 			}
 			if kk == '7' {
-				pot.sort = SORT_CPU
+				top.sort = SORT_CPU
 			}
 			if kk == '8' {
-				pot.sort = SORT_RAM
+				top.sort = SORT_RAM
 			}
 			if kk == 'I' {
-				pot.reverse = !pot.reverse
+				top.reverse = !top.reverse
 			}
 		case <-t:
-			pot.snapshot = pot.Snapshot()
+			top.snapshot = top.Snapshot()
 		case <-s:
 			gnc.End()
-			pot.win.Refresh()
+			top.win.Refresh()
 		}
 	}
 }
 
-func (pot *Pot) UpdatePot(lc int, wc int) {
+func (top *Top) Updatetop(lc int, wc int) {
 	ss := make([]PrintedLine, 0, 42)
 
-	sort.Sort(SortableContainers{pot.snapshot, pot.sort, pot.reverse})
+	sort.Sort(SortableContainers{top.snapshot, top.sort, top.reverse})
 
-	for _, cnt := range pot.snapshot {
+	for _, cnt := range top.snapshot {
 		p := PrintedLine{
 			line:        cnt.container.Format(wc),
 			isContainer: true,
@@ -344,7 +340,7 @@ func (pot *Pot) UpdatePot(lc int, wc int) {
 			p.isRunning = true
 		}
 		ss = append(ss, p)
-		if pot.showGlobalProcesses || cnt.showProcesses {
+		if top.showGlobalProcesses || cnt.showProcesses {
 			for _, proc := range cnt.processes {
 				ss = append(ss, PrintedLine{proc.Format(wc), false, true, false, false})
 			}
@@ -362,45 +358,45 @@ func (pot *Pot) UpdatePot(lc int, wc int) {
 		scroll = active
 	}
 	for i, s := range ss {
-		pot.PrintActive(s, lc, i)
+		top.PrintActive(s, lc, i)
 	}
 }
 
-func (pot *Pot) colorColumn(s string, sort Sort) {
-	if pot.sort == sort {
-		pot.win.AttrOn(gnc.A_REVERSE)
-		pot.win.ColorOn(COLOR_HIGHLIGHT)
-		pot.win.Printf("%s", s)
-		pot.win.ColorOff(COLOR_HIGHLIGHT)
-		pot.win.AttrOff(gnc.A_REVERSE)
+func (top *Top) colorColumn(s string, sort Sort) {
+	if top.sort == sort {
+		top.win.AttrOn(gnc.A_REVERSE)
+		top.win.ColorOn(COLOR_HIGHLIGHT)
+		top.win.Printf("%s", s)
+		top.win.ColorOff(COLOR_HIGHLIGHT)
+		top.win.AttrOff(gnc.A_REVERSE)
 		return
 	}
-	pot.win.AttrOn(gnc.A_REVERSE)
-	pot.win.Printf("%s", s)
-	pot.win.AttrOff(gnc.A_REVERSE)
+	top.win.AttrOn(gnc.A_REVERSE)
+	top.win.Printf("%s", s)
+	top.win.AttrOff(gnc.A_REVERSE)
 }
 
-func (pot *Pot) PrintHeader(wc int) {
+func (top *Top) PrintHeader(wc int) {
 	o, _ := exec.Command("uptime").Output()
-	pot.win.Printf("%s", o)
+	top.win.Printf("%s", o)
 
-	pot.colorColumn(PrettyColumn("Name", wc, " ", " "), SORT_NAME)
-	pot.colorColumn(PrettyColumn("Image", wc, " ", " "), SORT_IMAGE)
-	pot.colorColumn(PrettyColumn("Id", wc, " ", " "), SORT_ID)
-	pot.colorColumn(PrettyColumn("Command", wc, " ", " "), SORT_COMMAND)
-	pot.colorColumn(PrettyColumn("Uptime", wc, " ", " "), SORT_UPTIME)
-	pot.colorColumn(PrettyColumn("Status", wc, " ", " "), SORT_STATUS)
-	pot.colorColumn(PrettyColumn("%CPU", wc, " ", " "), SORT_CPU)
-	pot.colorColumn(PrettyColumn("%RAM", wc, " ", " "), SORT_RAM)
-	pot.win.Println()
+	top.colorColumn(PrettyColumn("Name", wc, " ", " "), SORT_NAME)
+	top.colorColumn(PrettyColumn("Image", wc, " ", " "), SORT_IMAGE)
+	top.colorColumn(PrettyColumn("Id", wc, " ", " "), SORT_ID)
+	top.colorColumn(PrettyColumn("Command", wc, " ", " "), SORT_COMMAND)
+	top.colorColumn(PrettyColumn("Uptime", wc, " ", " "), SORT_UPTIME)
+	top.colorColumn(PrettyColumn("Status", wc, " ", " "), SORT_STATUS)
+	top.colorColumn(PrettyColumn("%CPU", wc, " ", " "), SORT_CPU)
+	top.colorColumn(PrettyColumn("%RAM", wc, " ", " "), SORT_RAM)
+	top.win.Println()
 }
 
-func (pot *Pot) PrintPot(wc int, lc int) {
-	pot.PrintHeader(wc)
-	pot.UpdatePot(lc, wc)
+func (top *Top) Printtop(wc int, lc int) {
+	top.PrintHeader(wc)
+	top.Updatetop(lc, wc)
 }
 
-func (pot *Pot) PrintInfo(wc int) {
+func (top *Top) PrintInfo(wc int) {
 	var info = Page{
 		Header: "\nInformation about container:\n",
 		Info:   "",
@@ -408,52 +404,52 @@ func (pot *Pot) PrintInfo(wc int) {
 		Footer: "\nPress 'i' to return.",
 	}
 
-	info.Body = append(info.Body, ItemPair{"Name", pot.currentInfo.container.Name})
-	info.Body = append(info.Body, ItemPair{"Id", pot.currentInfo.container.Id})
-	info.Body = append(info.Body, ItemPair{"Command", pot.currentInfo.container.Command})
-	info.Body = append(info.Body, ItemPair{"Uptime", pot.currentInfo.container.Uptime})
-	info.Body = append(info.Body, ItemPair{"Status", pot.currentInfo.container.Status})
-	info.Body = append(info.Body, ItemPair{"%CPU", pot.currentInfo.container.CPU})
-	info.Body = append(info.Body, ItemPair{"%RAM", pot.currentInfo.container.RAM})
+	info.Body = append(info.Body, ItemPair{"Name", top.currentInfo.container.Name})
+	info.Body = append(info.Body, ItemPair{"Id", top.currentInfo.container.Id})
+	info.Body = append(info.Body, ItemPair{"Command", top.currentInfo.container.Command})
+	info.Body = append(info.Body, ItemPair{"Uptime", top.currentInfo.container.Uptime})
+	info.Body = append(info.Body, ItemPair{"Status", top.currentInfo.container.Status})
+	info.Body = append(info.Body, ItemPair{"%CPU", top.currentInfo.container.CPU})
+	info.Body = append(info.Body, ItemPair{"%RAM", top.currentInfo.container.RAM})
 
-	pot.PrintPage(info, wc)
+	top.PrintPage(info, wc)
 }
 
-func (pot *Pot) PrintPage(p Page, wc int) {
-	pot.win.ColorOn(COLOR_SELECTION)
-	pot.win.Printf("%s\n", p.Header)
-	pot.win.ColorOff(COLOR_SELECTION)
+func (top *Top) PrintPage(p Page, wc int) {
+	top.win.ColorOn(COLOR_SELECTION)
+	top.win.Printf("%s\n", p.Header)
+	top.win.ColorOff(COLOR_SELECTION)
 
-	pot.win.Printf("%s", p.Info)
+	top.win.Printf("%s", p.Info)
 
 	for _, v := range p.Body {
-		pot.win.ColorOn(COLOR_HELP)
-		pot.win.Printf("%s", PrettyColumn(v.Com+":", 20, " ", " "))
-		pot.win.ColorOff(COLOR_HELP)
-		pot.win.Printf("%s", PrettyColumn(v.Def, 40, " ", " "))
-		pot.win.Println()
+		top.win.ColorOn(COLOR_HELP)
+		top.win.Printf("%s", PrettyColumn(v.Com+":", 20, " ", " "))
+		top.win.ColorOff(COLOR_HELP)
+		top.win.Printf("%s", PrettyColumn(v.Def, 40, " ", " "))
+		top.win.Println()
 	}
 
-	pot.win.ColorOn(COLOR_CONTAINER)
-	pot.win.Printf("%s\n", p.Footer)
-	pot.win.ColorOff(COLOR_CONTAINER)
+	top.win.ColorOn(COLOR_CONTAINER)
+	top.win.Printf("%s\n", p.Footer)
+	top.win.ColorOff(COLOR_CONTAINER)
 }
 
-func (pot *Pot) PrintHelp(wc int) {
-	pot.PrintPage(help, wc)
+func (top *Top) PrintHelp(wc int) {
+	top.PrintPage(help, wc)
 }
 
-func (pot *Pot) GetContainerByPos(line_num int) int {
+func (top *Top) GetContainerByPos(line_num int) int {
 	i := 0
 
-	for res, cnt := range pot.snapshot {
+	for res, cnt := range top.snapshot {
 		if i == line_num {
 			return res
 		}
 		if i > line_num {
 			break
 		}
-		if pot.showGlobalProcesses || cnt.showProcesses {
+		if top.showGlobalProcesses || cnt.showProcesses {
 			i += len(cnt.processes)
 		}
 		i++
@@ -462,17 +458,17 @@ func (pot *Pot) GetContainerByPos(line_num int) int {
 	return -1
 }
 
-func (pot *Pot) getSelectedContainers() []int {
+func (top *Top) getSelectedContainers() []int {
 	res := make([]int, 0, 5)
-	for i, c := range pot.snapshot {
+	for i, c := range top.snapshot {
 		if c.isSelected {
 			res = append(res, i)
 		}
 	}
 	if len(res) == 0 {
-		c := pot.GetContainerByPos(active)
+		c := top.GetContainerByPos(active)
 		if c != -1 {
-			if !pot.snapshot[c].isSelected {
+			if !top.snapshot[c].isSelected {
 				res = append(res, c)
 			}
 		}
@@ -480,7 +476,7 @@ func (pot *Pot) getSelectedContainers() []int {
 	return res
 }
 
-func (pot *Pot) StopContainer(c *Container) {
+func (top *Top) StopContainer(c *Container) {
 	id := c.container.Id
 	go func(id string) {
 		// @todo: use docker API
@@ -488,7 +484,7 @@ func (pot *Pot) StopContainer(c *Container) {
 	}(id)
 }
 
-func (pot *Pot) StartContainer(c *Container) {
+func (top *Top) StartContainer(c *Container) {
 	id := c.container.Id
 	go func(id string) {
 		// @todo: use docker API
@@ -496,7 +492,7 @@ func (pot *Pot) StartContainer(c *Container) {
 	}(id)
 }
 
-func (pot *Pot) RmContainer(c *Container) {
+func (top *Top) RmContainer(c *Container) {
 	id := c.container.Id
 	go func(id string) {
 		// @todo: use docker API
@@ -504,7 +500,7 @@ func (pot *Pot) RmContainer(c *Container) {
 	}(id)
 }
 
-func (pot *Pot) KillContainer(c *Container) {
+func (top *Top) KillContainer(c *Container) {
 	id := c.container.Id
 	go func(id string) {
 		// @todo: use docker API
@@ -512,7 +508,7 @@ func (pot *Pot) KillContainer(c *Container) {
 	}(id)
 }
 
-func (pot *Pot) PauseContainer(c *Container) {
+func (top *Top) PauseContainer(c *Container) {
 	id := c.container.Id
 	go func(id string) {
 		// @todo: use docker API
@@ -520,7 +516,7 @@ func (pot *Pot) PauseContainer(c *Container) {
 	}(id)
 }
 
-func (pot *Pot) UnpauseContainer(c *Container) {
+func (top *Top) UnpauseContainer(c *Container) {
 	id := c.container.Id
 	go func(id string) {
 		// @todo: use docker API

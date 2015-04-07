@@ -26,7 +26,7 @@ const (
 type Status int // What we are doing
 
 const (
-	STATUS_POT     = iota // Currently displaying containers
+	STATUS_TOP     = iota // Currently displaying containers
 	STATUS_HELP           // Currently displaying help
 	STATUS_CONFIRM        // Currently waiting for confirmation
 	STATUS_INFO           // Currently displaying info
@@ -124,6 +124,6 @@ func main() {
 
 	flag.Parse()
 
-	p := NewPot()
+	p := NewTop()
 	p.Run()
 }
